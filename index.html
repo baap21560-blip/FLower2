@@ -1,4 +1,17 @@
-<style>
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="flower Garden">
+    <title>Flower Garden</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600&family=Inter:wght@300;400&display=swap" rel="stylesheet">
+
+    <style>
     :root {
         --bg-color: #f8f5f2;
         --text-color: #dbdbdb;
@@ -201,3 +214,236 @@
         }
     }
 </style>
+</head>
+
+<body>
+    <div class="container">
+        <canvas id="canvas"></canvas>
+        <div class="particles" id="particles"></div>
+
+        <header class="header">
+            <h1 class="logo">🌸 Flower Garden for You </h1>
+        </header>
+
+        <div class="name">
+            <span class="text-line">Click Anywhere to</span>
+            <span class="text-highlight">Plant Flowers</span>
+            <span class="text-line">✨ or turn on Auto Bloom</span>
+        </div>
+
+        <div class="controls">
+            <button class="clean-btn" id="cleanBtn">
+                <span class="btn-icon">🧹</span>
+                <span class="btn-text">Clear Garden</span>
+            </button>
+            <button class="auto-btn" id="autoBtn">
+                <span class="btn-icon">✨</span>
+                <span class="btn-text">Auto Bloom</span>
+            </button>
+        </div>
+
+        <footer class="footer">
+            <span>Made with 💖 | Tap to grow flowers</span>
+        </footer>
+    </div>
+
+    <script type="x-shader/x-fragment" id="fragmentShader">
+        #define PI 3.14159265359
+        uniform float u_ratio;
+        uniform vec2 u_cursor;
+        uniform float u_stop_time;
+        uniform float u_clean;
+        uniform vec2 u_stop_randomizer;
+        uniform float u_theme; 
+        uniform sampler2D u_texture;
+        varying vec2 vUv;
+
+        vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+        vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+        vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
+        float snoise(vec2 v) {
+            const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+            vec2 i = floor(v + dot(v, C.yy));
+            vec2 x0 = v - i + dot(i, C.xx);
+            vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+            vec4 x12 = x0.xyxy + C.xxzz;
+            x12.xy -= i1;
+            i = mod289(i);
+            vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
+            vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
+            m = m*m; m = m*m;
+            vec3 x = 2.0 * fract(p * C.www) - 1.0;
+            vec3 h = abs(x) - 0.5;
+            vec3 ox = floor(x + 0.5);
+            vec3 a0 = x - ox;
+            m *= 1.79284291400159 - 0.85373472095314 * (a0*a0 + h*h);
+            vec3 g;
+            g.x = a0.x * x0.x + h.x * x0.y;
+            g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+            return 130.0 * dot(m, g);
+        }
+
+        float get_flower_shape(vec2 _p, float _pet_n, float _angle, float _outline) {
+            _angle *= 3.;
+            _p = vec2(_p.x * cos(_angle) - _p.y * sin(_angle), _p.x * sin(_angle) + _p.y * cos(_angle));
+            float a = atan(_p.y, _p.x);
+            float petal_variation = 0.15 * sin(a * _pet_n * 2.0);
+            float flower_sectoral_shape = pow(abs(sin(a * _pet_n)), .35) + .2 + petal_variation;
+            vec2 flower_size_range = vec2(.04, .12);
+            float size = flower_size_range[0] + u_stop_randomizer[0] * flower_size_range[1];
+            float flower_radial_shape = pow(length(_p) / size, 1.8);
+            flower_radial_shape -= .12 * sin(8. * a + u_stop_randomizer[1] * 6.28);
+            flower_radial_shape = max(.08, flower_radial_shape);
+            flower_radial_shape += smoothstep(0., 0.025, -_p.y + .18 * abs(_p.x));
+            float grow_time = step(.25, u_stop_time) * pow(u_stop_time, .25);
+            return 1. - smoothstep(0., flower_sectoral_shape, _outline * flower_radial_shape / grow_time);
+        }
+
+        float get_stem_shape(vec2 _p, vec2 _uv, float _w, float _angle) {
+            _w = max(.003, _w);
+            float x_offset = _p.y * sin(_angle) * pow(3. * _uv.y, 2.0);
+            _p.x -= x_offset;
+            _p.x += .4 * snoise(2.5 * _uv * u_stop_randomizer[0]) * pow(dot(_p.y, _p.y), .5) * pow(dot(_uv.y, _uv.y), .25);
+            float left = smoothstep(-_w, 0., _p.x);
+            float right = 1. - smoothstep(0., _w, _p.x);
+            float stem_shape = left * right;
+            float grow_time = 1. - smoothstep(0., .18, u_stop_time);
+            return stem_shape * smoothstep(0., pow(grow_time, .45), .035 -_p.y) * (1. - step(.17, u_stop_time));
+        }
+
+        float get_leaf_shape(vec2 p, float angle, float size) {
+            float a = atan(p.y, p.x) + angle;
+            float r = length(p);
+            float leaf = (sin(a * 2.0 + sin(a * 15.0) * 0.1) * 0.5 + 0.5) * smoothstep(size, 0.0, r) * smoothstep(0.0, size * 0.2, r);
+            return max(0.0, leaf * step(0.0, sin(a))) * 0.8;
+        }
+
+        void main() {
+            vec3 base = texture2D(u_texture, vUv).xyz;
+            vec2 uv = vUv; uv.x *= u_ratio;
+            vec2 cursor = vUv - u_cursor.xy; cursor.x *= u_ratio;
+            vec3 stem_color = mix(vec3(.15 + u_stop_randomizer[0] * .4, .65, .25), vec3(.1, .45, .15), u_theme);
+            
+            float color_type = floor(u_stop_randomizer[1] * 4.0);
+            vec3 flower_color = (color_type < 1.0) ? vec3(.85, .15, .25) : (color_type < 2.0) ? vec3(.95, .45, .55) : (color_type < 3.0) ? vec3(.95, .75, .2) : vec3(.7, .4, .85);
+            flower_color += vec3(u_stop_randomizer[0] * 0.1 - 0.05);
+
+            float angle = .5 * (u_stop_randomizer[0] - .5);
+            float stem_shape = get_stem_shape(cursor, uv, .004, angle) + get_stem_shape(cursor + vec2(0., .22 + .4 * u_stop_randomizer[0]), uv, .003, angle);
+            stem_shape += get_leaf_shape(cursor + vec2(0.02, 0.08), angle + 0.5, 0.02) + get_leaf_shape(cursor + vec2(-0.02, 0.12), angle - 0.5, 0.015);
+            
+            float flower_back = get_flower_shape(cursor, 2. + floor(u_stop_randomizer[0] * 3.), angle - (2. * step(0., angle) - 1.) * .08 * u_stop_time, 1.4);
+            float flower_front = get_flower_shape(cursor, 3. + floor(u_stop_randomizer[1] * 3.), angle, 1.0);
+
+            vec3 color = base * (1. - stem_shape) * (1. - flower_back) * (1. - flower_front);
+            color += (stem_shape * stem_color) + (flower_back * flower_color * 0.7) + (flower_front * flower_color);
+            color += vec3(1.0, 0.95, 0.7) * smoothstep(1.5, 0.0, length(cursor) * 15.0) * flower_front * 0.4 * step(0.3, u_stop_time);
+            
+            gl_FragColor = vec4(color * u_clean, 1.);
+        }
+    </script>
+
+    <script type="x-shader/x-vertex" id="vertexShader">
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = vec4(position, 1.); }
+    </script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        const canvasEl = document.querySelector("#canvas");
+        const cleanBtn = document.querySelector("#cleanBtn");
+        const autoBtn = document.querySelector("#autoBtn");
+        const nameOverlay = document.querySelector(".name");
+        const headerOverlay = document.querySelector(".header");
+
+        let renderer, scene, camera, material, rt1, rt2;
+        let isAutoBloom = false, cleanValue = 1.0, stopTime = 1.0;
+        const flowerPos = new THREE.Vector2(0.5, 0.5);
+        const stopRand = new THREE.Vector2(0, 0);
+
+        init();
+        animate();
+
+        function init() {
+            renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            rt1 = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+            rt2 = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+
+            scene = new THREE.Scene();
+            camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+            material = new THREE.ShaderMaterial({
+                uniforms: {
+                    u_ratio: { value: window.innerWidth / window.innerHeight },
+                    u_cursor: { value: flowerPos },
+                    u_stop_time: { value: stopTime },
+                    u_clean: { value: cleanValue },
+                    u_stop_randomizer: { value: stopRand },
+                    u_texture: { value: rt2.texture },
+                    u_theme: { value: 0.0 }
+                },
+                vertexShader: document.getElementById('vertexShader').textContent,
+                fragmentShader: document.getElementById('fragmentShader').textContent
+            });
+
+            scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material));
+
+            window.addEventListener('resize', () => {
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                rt1.setSize(window.innerWidth, window.innerHeight);
+                rt2.setSize(window.innerWidth, window.innerHeight);
+                material.uniforms.u_ratio.value = window.innerWidth / window.innerHeight;
+            });
+
+            canvasEl.addEventListener('click', (e) => {
+                plant(e.clientX, e.clientY);
+                nameOverlay.classList.add('fade-out');
+                headerOverlay.classList.add('fade-out');
+            });
+
+            cleanBtn.addEventListener('click', () => {
+                cleanValue = 0.0;
+                setTimeout(() => cleanValue = 1.0, 100);
+            });
+
+            autoBtn.addEventListener('click', () => {
+                isAutoBloom = !isAutoBloom;
+                autoBtn.classList.toggle('active');
+                if(isAutoBloom) {
+                    nameOverlay.classList.add('fade-out');
+                    headerOverlay.classList.add('fade-out');
+                }
+            });
+        }
+
+        function plant(x, y) {
+            flowerPos.set(x / window.innerWidth, 1 - y / window.innerHeight);
+            stopTime = 0.0;
+            stopRand.set(Math.random(), Math.random());
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (isAutoBloom && Math.random() < 0.04) plant(Math.random() * window.innerWidth, Math.random() * window.innerHeight);
+            if (stopTime < 1.0) stopTime += 0.02;
+
+            material.uniforms.u_stop_time.value = stopTime;
+            material.uniforms.u_clean.value = cleanValue;
+
+            renderer.setRenderTarget(rt1);
+            renderer.render(scene, camera);
+            
+            let temp = rt1; rt1 = rt2; rt2 = temp;
+            material.uniforms.u_texture.value = rt2.texture;
+
+            renderer.setRenderTarget(null);
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+
+</html>
